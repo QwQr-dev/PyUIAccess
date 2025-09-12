@@ -1,161 +1,180 @@
 # coding = 'utf-8'
 
-import tkinter as tk
-from method import *
+'''
+获取 UI Access
+
+原理：
+
+uiaccess
+
+https://github.com/killtimer0/uiaccess
+
+【揭秘窗口置顶中的『等级制度』！窗口Z序和UIAccess又是什么?】 
+
+https://www.bilibili.com/video/BV1HCwwegEVp/?share_source=copy_web&vd_source=d9b0a480a8ddccc1515316b991134fda
+
+'''
+
+# method: https://github.com/QwQr-dev/method
+
 from method.core.windows import *
 
-# 原理：https://github.com/killtimer0/uiaccess
-
-
-def AdjustTokenPrivileges(TokenHandle, DisableAllPrivileges, NewState, BufferLength, PreviousState, ReturnLength):
-    AdjustTokenPrivileges = advapi32.AdjustTokenPrivileges
-    res = AdjustTokenPrivileges(TokenHandle, 
-                                DisableAllPrivileges, 
-                                NewState, 
-                                BufferLength, 
-                                PreviousState, 
-                                ReturnLength
-    )
-
-    if not res:
-        raise WinError(GetLastError())
-
-
-def DefWindowProc(hwnd, message, wParam, lParam, unicode: bool = True) -> int:
-    DefWindowProc = (User32.DefWindowProcW 
-                     if unicode else User32.DefWindowProcA
-    )
-
-    DefWindowProc.argtypes = [HWND, UINT, WPARAM, LPARAM]
-    DefWindowProc.restype = LRESULT
-    res = DefWindowProc(hwnd, message, wParam, lParam)
-    return res
+if WIN32_WINNT < WIN32_WINNT_WIN8:
+    raise OSError('Do not supported system.')
 
 
 def DuplicateWinloginToken(dwSessionId, dwDesiredAccess):
     ps = PRIVILEGE_SET()
     ps.PrivilegeCount = 1
-    ps.Control = PRIVILEGE_SET_ALL_NECESSARY
+    ps.Control =  PRIVILEGE_SET_ALL_NECESSARY
 
-    # hToken = OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY)
-    
-    luid = LookupPrivilegeValue(NULL, SE_TCB_NAME)
-
-    tp = TOKEN_PRIVILEGES()
-    tp.PrivilegeCount = 1
-    tp.Privileges[0].Luid = luid
-    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
-    
+    LookupPrivilegeValue(NULL, SE_TCB_NAME, byref(ps.Privilege[0].Luid))
     hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+
     pe = PROCESSENTRY32W()
     pe.dwSize = sizeof(pe)
+
     Process32First(hSnapshot, byref(pe))
 
     while True:
-        if pe.szExeFile.lower() != "winlogon.exe":
+        if pe.szExeFile.lower() != 'winlogon.exe':
             Process32Next(hSnapshot, byref(pe))
             continue
-        
-        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID)
+
+        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pe.th32ProcessID)
+
+        hToken = HANDLE()
+        OpenProcessToken(hProcess, TOKEN_QUERY | TOKEN_DUPLICATE, byref(hToken))
+
+        fTcb = BOOL()
+        PrivilegeCheck(hToken, byref(ps), byref(fTcb))
+
         sid = DWORD()
+        dwRetLen = DWORD()
 
-        hToken = OpenProcessToken(hProcess, TOKEN_QUERY | TOKEN_DUPLICATE)
-
-        AdjustTokenPrivileges(hToken, False, byref(tp), sizeof(tp), NULL, NULL)
-
-        RequiredPrivileges, pfResult = PrivilegeCheck(hToken, byref(ps))
-
-        if pfResult:    # error 
-            sid = GetTokenInformation(hToken, TokenSessionId, sizeof(sid)) 
-            if sid == dwSessionId:
-                DuplicateTokenEx(hToken, dwDesiredAccess, NULL, SecurityImpersonation, TokenImpersonation)
+        GetTokenInformation(hToken, TokenSessionId, byref(sid), sizeof(sid), byref(dwRetLen))
+        if sid.value == dwSessionId.value:
+            hTokenDup = HANDLE()
+            DuplicateTokenEx(hToken, dwDesiredAccess, NULL, SecurityImpersonation, TokenImpersonation, byref(hTokenDup))
+            hTokenResult = hTokenDup
 
         CloseHandle(hToken)
         CloseHandle(hProcess)
-        break
+
+        if hTokenResult:
+            break
+
     CloseHandle(hSnapshot)
+    return hTokenResult
 
 
 def CreateUIAccessToken():
-    hTokenSelf = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE)
-    dwSessionId = DWORD()
-
-    dwSessionId = GetTokenInformation(hTokenSelf, TokenSessionId, sizeof(dwSessionId))
-
-    hTokenSystem = HANDLE()
-
-    DuplicateWinloginToken(dwSessionId, TOKEN_IMPERSONATE)
-
-    SetThreadToken(NULL, hTokenSystem)
-    phToken = DuplicateTokenEx(hTokenSelf, 
-                               TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, 
-                               NULL, 
-                               SecurityAnonymous, 
-                               TokenPrimary
+    hTokenSelf = HANDLE()
+    OpenProcessToken(GetCurrentProcess(), 
+                     TOKEN_QUERY | TOKEN_DUPLICATE, 
+                     byref(hTokenSelf)
     )
 
-    bUIAccess = BOOL(TRUE)
+    dwSessionId = DWORD()
+    dwRetLen = DWORD()
 
-    SetTokenInformation(phToken, TokenUIAccess, byref(bUIAccess), sizeof(bUIAccess))
+    GetTokenInformation(hTokenSelf, 
+                        TokenSessionId, 
+                        byref(dwSessionId), 
+                        sizeof(dwSessionId), 
+                        byref(dwRetLen))
+        
+    hTokenSystem = DuplicateWinloginToken(dwSessionId, TOKEN_IMPERSONATE)
 
-    try:
-        pass
-    except Exception as e:
-        raise OSError(e)
-    finally:
-        CloseHandle(phToken)
-    
+    SetThreadToken(NULL, hTokenSystem)
+    hTokenUIAccess = HANDLE()
+
+    DuplicateTokenEx(hTokenSelf, 
+                     TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, 
+                     NULL, 
+                     SecurityAnonymous, 
+                     TokenPrimary, 
+                     byref(hTokenUIAccess)
+    )
+
+    bUIAccess = BOOL(True)
+
+    SetTokenInformation(hTokenUIAccess, 
+                        TokenUIAccess, 
+                        byref(bUIAccess), 
+                        sizeof(bUIAccess)
+    )
+
     RevertToSelf()
+
     CloseHandle(hTokenSystem)
     CloseHandle(hTokenSelf)
-
-
-def CheckForUIAccess():
-    fUIAccess = BOOL()
-    hToken = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)
-    GetTokenInformation(hToken, TokenUIAccess, byref(fUIAccess))
-    CloseHandle(hToken)
+    return hTokenUIAccess
 
 
 def PrepareForUIAccess():
-    # 获取19号关机特权
-    # RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, TRUE, FALSE, byref(BOOLEAN()))
-    hTokenUIAccess = HANDLE()
-    
-    CreateUIAccessToken()
+    hToken = HANDLE()
+    OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, byref(hToken))
 
-    si = GetStartupInfo()
-    pi = CreateProcessAsUser(hTokenUIAccess, 
-                             LPCWSTR(), 
-                             GetCommandLine(), 
-                             NULL, 
-                             NULL, 
-                             FALSE, 
-                             DWORD(), 
-                             NULL,
-                             NULL, 
-                             byref(si)
+    dwUIAccess = BOOL()
+    dwRetLen = DWORD()
+
+    GetTokenInformation(hToken, TokenUIAccess, byref(dwUIAccess), sizeof(dwUIAccess), byref(dwRetLen))
+    if dwUIAccess.value:
+        CloseHandle(hToken)
+        return
+        
+    CloseHandle(hToken)
+
+    hTokenUIAccess = CreateUIAccessToken()
+    si = STARTUPINFOW()
+    pi = PROCESS_INFORMATION()
+    si.cb = sizeof(STARTUPINFOW)
+
+    CreateProcessAsUser(hTokenUIAccess, 
+                        NULL, 
+                        GetCommandLine(), 
+                        NULL, 
+                        NULL, 
+                        False, 
+                        NULL, 
+                        NULL, 
+                        NULL,   
+                        byref(si), 
+                        byref(pi)
     )
-
-    pi = pi['lpProcessInformation']
 
     CloseHandle(pi.hProcess)
     CloseHandle(pi.hThread)
-    # ExitProcess(0)
-    # CloseHandle(hTokenUIAccess)
+    CloseHandle(hTokenUIAccess)
+    sys.exit(0)
 
 
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.mainloop()
+UIAccess = PrepareForUIAccess
 
 
 if __name__ == '__main__':
-    # Temp failed
-    PrepareForUIAccess()
-    # OverlayWindow = GetForegroundWindow()
-    # App()
-    # SetWindowPos(NULL, HWND_TOPMOST, NULL, NULL, NULL, NULL, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    # ShowWindow(OverlayWindow, SW_NORMAL)
-    # UpdateWindow(OverlayWindow)
+    # test
+    # 提示：使用 Process Explorer 并在 “ 视图（View） -> 选择显示的项目（Select Columns）-> Process Image ” 勾选 “ 用户界面访问（UI Access）” 即可查看
+
+    from method import RunAsAdmin
+
+    RunAsAdmin()
+    UIAccess()
+    si = STARTUPINFOW()
+    si.cb = sizeof(si)
+    si.dwFlags = DEBUG_PROCESS
+    si.wShowWindow = DEBUG_PROCESS
+
+    CreateProcess(NULL, 
+                  f'c:\\windows\\system32\\cmd.exe', 
+                  NULL, 
+                  NULL, 
+                  FALSE, 
+                  CREATE_NEW_CONSOLE, 
+                  NULL, 
+                  NULL, 
+                  byref(si),
+                  byref(VOID())
+    )
+
