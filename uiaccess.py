@@ -23,7 +23,7 @@ if WIN32_WINNT < WIN32_WINNT_WIN8:
     raise OSError('Do not supported system.')
 
 
-def DuplicateWinloginToken(dwSessionId, dwDesiredAccess):
+def DuplicateWinloginToken(dwSessionId, dwDesiredAccess, goal_exec: str = 'winlogon.exe'):
     ps = PRIVILEGE_SET()
     ps.PrivilegeCount = 1
     ps.Control =  PRIVILEGE_SET_ALL_NECESSARY
@@ -37,7 +37,7 @@ def DuplicateWinloginToken(dwSessionId, dwDesiredAccess):
     Process32First(hSnapshot, byref(pe))
 
     while True:
-        if pe.szExeFile.lower() != 'winlogon.exe':
+        if pe.szExeFile.lower() != goal_exec.lower():
             Process32Next(hSnapshot, byref(pe))
             continue
 
@@ -53,7 +53,7 @@ def DuplicateWinloginToken(dwSessionId, dwDesiredAccess):
         dwRetLen = DWORD()
 
         GetTokenInformation(hToken, TokenSessionId, byref(sid), sizeof(sid), byref(dwRetLen))
-        if sid.value == dwSessionId.value:
+        if sid.value == dwSessionId.value or sid.value != dwSessionId.value:
             hTokenDup = HANDLE()
             DuplicateTokenEx(hToken, dwDesiredAccess, NULL, SecurityImpersonation, TokenImpersonation, byref(hTokenDup))
             hTokenResult = hTokenDup
@@ -84,7 +84,7 @@ def CreateUIAccessToken():
                         sizeof(dwSessionId), 
                         byref(dwRetLen))
         
-    hTokenSystem = DuplicateWinloginToken(dwSessionId, TOKEN_IMPERSONATE)
+    hTokenSystem = DuplicateWinloginToken(dwSessionId, TOKEN_IMPERSONATE, 'wininit.exe')
 
     SetThreadToken(NULL, hTokenSystem)
     hTokenUIAccess = HANDLE()
@@ -158,6 +158,7 @@ if __name__ == '__main__':
     # 提示：使用 Process Explorer 并在 “ 视图（View） -> 选择显示的项目（Select Columns）-> Process Image ” 勾选 “ 用户界面访问（UI Access）” 即可查看
 
     from method import RunAsAdmin
+    from method.core.filedialog import askopenfilename, lpstrFilter
 
     RunAsAdmin()
     UIAccess()
@@ -166,8 +167,10 @@ if __name__ == '__main__':
     si.dwFlags = DEBUG_PROCESS
     si.wShowWindow = DEBUG_PROCESS
 
+    exec_path = askopenfilename('打开文件', lpstrFilter([('All', '*.*')]), hwnd=GetForegroundWindow())
+
     CreateProcess(NULL, 
-                  f'c:\\windows\\system32\\cmd.exe', 
+                  exec_path, 
                   NULL, 
                   NULL, 
                   FALSE, 
