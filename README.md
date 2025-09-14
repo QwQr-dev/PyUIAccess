@@ -11,8 +11,12 @@ https://github.com/killtimer0/uiaccess
 
 https://www.bilibili.com/video/BV1HCwwegEVp/?share_source=copy_web&vd_source=d9b0a480a8ddccc1515316b991134fda
 
-需要的模块
+需要的模块：
 
 method
 
 https://github.com/QwQr-dev/method
+
+解释器版本：
+
+Python3.13 及以上
